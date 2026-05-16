@@ -1,6 +1,7 @@
+// file: x-pay/frontend/app/page.tsx
 'use client'
 import Image from "next/image";
-import { createClient } from "@/utils/supabase/client"; // Đảm bảo đường dẫn này đúng với file bạn vừa tạo
+import { createClient } from "@/utils/supabase/client";
 
 export default function Home() {
   const supabase = createClient();
@@ -9,7 +10,6 @@ export default function Home() {
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        // Chú ý: Redirect về /auth/callback để Supabase xử lý session
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
@@ -31,13 +31,12 @@ export default function Home() {
             Welcome to X-Pay
           </h1>
           <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Tích hợp thanh toán Crypto và đăng nhập an toàn với Google. 
+            Tích hợp thanh toán Crypto và đăng nhập an toàn với Google.
             Bắt đầu trải nghiệm ngay hôm nay.
           </p>
         </div>
 
         <div className="flex flex-col gap-4 text-base font-medium sm:flex-row w-full sm:w-auto">
-          {/* Nút Sign in with Google thay thế cho nút Deploy Now */}
           <button
             onClick={handleGoogleLogin}
             className="flex h-12 w-full items-center justify-center gap-3 rounded-full bg-black text-white px-5 transition-colors hover:bg-[#383838] dark:bg-white dark:text-black dark:hover:bg-[#ccc] md:w-[220px]"

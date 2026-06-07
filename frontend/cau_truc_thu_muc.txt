@@ -1,0 +1,42 @@
+.
+├── AGENTS.md
+├── app
+│   ├── auth
+│   │   ├── callback
+│   │   │   └── route.ts
+│   │   └── folder
+│   ├── dashboard
+│   │   └── page.tsx
+│   ├── favicon.ico
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx
+├── cau_truc_thu_muc.txt
+├── CLAUDE.md
+├── eslint.config.mjs
+├── lib
+│   ├── contracts
+│   │   ├── index.ts
+│   │   └── XPay.json
+│   ├── hooks
+│   └── wagmi
+│       └── config.ts
+├── next.config.ts
+├── next-env.d.ts
+├── package.json
+├── package-lock.json
+├── postcss.config.mjs
+├── public
+│   ├── file.svg
+│   ├── globe.svg
+│   ├── next.svg
+│   ├── vercel.svg
+│   └── window.svg
+├── README.md
+├── tsconfig.json
+├── utils
+│   └── supabase
+│       └── client.ts
+└── vercel.json
+
+13 directories, 27 files

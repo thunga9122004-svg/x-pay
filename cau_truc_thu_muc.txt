@@ -1,0 +1,74 @@
+.
+├── backend
+│   ├── artifacts
+│   │   ├── artifacts.d.ts
+│   │   ├── build-info
+│   │   │   ├── solc-0_8_28-53ecb2f58b0ec269f8becf5dcf222fb25eac2159.json
+│   │   │   └── solc-0_8_28-53ecb2f58b0ec269f8becf5dcf222fb25eac2159.output.json
+│   │   └── contracts
+│   │       └── XPay.sol
+│   │           ├── artifacts.d.ts
+│   │           └── XPay.json
+│   ├── cache
+│   │   ├── build-info
+│   │   └── compile-cache.json
+│   ├── contracts
+│   │   └── XPay.sol
+│   ├── hardhat.config.ts
+│   ├── ignition
+│   │   └── modules
+│   │       └── Counter.ts
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── README.md
+│   ├── scripts
+│   │   └── send-op-tx.ts
+│   ├── test
+│   │   └── Counter.ts
+│   └── tsconfig.json
+├── cau_lenh_liet_ke_kien_truc_thu_muc.txt
+├── cau_truc_thu_muc.txt
+├── frontend
+│   ├── AGENTS.md
+│   ├── app
+│   │   ├── auth
+│   │   │   ├── callback
+│   │   │   │   └── route.ts
+│   │   │   └── folder
+│   │   ├── dashboard
+│   │   │   └── page.tsx
+│   │   ├── favicon.ico
+│   │   ├── globals.css
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   └── providers.tsx
+│   ├── cau_truc_thu_muc.txt
+│   ├── CLAUDE.md
+│   ├── eslint.config.mjs
+│   ├── lib
+│   │   ├── contracts
+│   │   │   ├── index.ts
+│   │   │   └── XPay.json
+│   │   ├── hooks
+│   │   └── wagmi
+│   │       └── config.ts
+│   ├── next.config.ts
+│   ├── next-env.d.ts
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── postcss.config.mjs
+│   ├── public
+│   │   ├── file.svg
+│   │   ├── globe.svg
+│   │   ├── next.svg
+│   │   ├── vercel.svg
+│   │   └── window.svg
+│   ├── README.md
+│   ├── tsconfig.json
+│   ├── utils
+│   │   └── supabase
+│   │       └── client.ts
+│   └── vercel.json
+└── README.md
+
+26 directories, 46 files

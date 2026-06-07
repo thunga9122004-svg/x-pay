@@ -1,0 +1,1 @@
+tree -I "node_modules|.git" > cau_truc_thu_muc.txt

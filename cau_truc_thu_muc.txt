@@ -1,4 +1,4 @@
-X-Pay
+X-Pay/
 ├── backend
 │   ├── artifacts
 │   │   ├── artifacts.d.ts

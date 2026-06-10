@@ -5,14 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/utils/supabase/client";
 import type { User } from "@supabase/supabase-js";
-// Xóa import cũ, thay bằng:
-import {
-  createPublicClient,
-  http,
-  parseEther,
-  formatEther,
-  createWalletClient,
-} from 'viem';
+import { createPublicClient, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import XPayABI from '@/lib/contracts/XPay.json';
@@ -39,28 +32,19 @@ export default function Dashboard() {
   const [message, setMessage] = useState('');
   const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [privateKey, setPrivateKey] = useState<string | null>(null);
 
-  // ── Tạo ví mới và lưu vào Supabase ──────────────────────────────────────
   const createAndSaveWallet = useCallback(async (userId: string) => {
     const pk = generatePrivateKey();
     const account = privateKeyToAccount(pk);
     const addr = account.address;
-
-    await supabase
-      .from('wallets')
-      .update({
-        wallet_address: addr,
-        encrypted_private_key: pk, // production nên mã hoá, đây là demo
-      })
-      .eq('user_id', userId);
-
+    await supabase.from('wallets').update({
+      wallet_address: addr,
+      encrypted_private_key: pk,
+    }).eq('user_id', userId);
     setWalletAddress(addr);
-    setPrivateKey(pk);
-    return { addr, pk };
+    return addr;
   }, [supabase]);
 
-  // ── Load user + ví khi mount ─────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -73,20 +57,16 @@ export default function Dashboard() {
         .eq('user_id', user.id)
         .single();
 
-      if (wallet?.wallet_address && wallet?.encrypted_private_key) {
+      if (wallet?.wallet_address) {
         setWalletAddress(wallet.wallet_address);
-        setPrivateKey(wallet.encrypted_private_key);
       } else {
-        // Lần đầu đăng nhập → tạo ví tự động
         await createAndSaveWallet(user.id);
       }
-
       setLoading(false);
     };
     init();
   }, []);
 
-  // ── Đọc số dư ────────────────────────────────────────────────────────────
   const fetchBalance = useCallback(async (addr?: string) => {
     const address = (addr || walletAddress) as `0x${string}`;
     if (!address) return;
@@ -97,7 +77,7 @@ export default function Dashboard() {
         functionName: 'getBalance',
         args: [address],
       });
-      setBalance(formatEther(bal as bigint));
+      setBalance((bal as bigint).toString());
     } catch (e) { console.error(e); }
   }, [walletAddress]);
 
@@ -105,98 +85,68 @@ export default function Dashboard() {
     if (walletAddress) fetchBalance(walletAddress);
   }, [walletAddress]);
 
-  // ── Tạo wallet client từ private key (không cần MetaMask) ────────────────
-  const getWalletClientFromPK = () => {
-    if (!privateKey) throw new Error('Không có private key');
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
-    return { walletClient: createWalletClient({ account, chain: sepolia, transport: http(process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL) }), account };
-  };
-
-  // ── Nạp tiền ─────────────────────────────────────────────────────────────
   async function handleDeposit() {
     const amount = parseFloat(depositAmount);
     if (!amount || amount <= 0) return setMessage('❌ Nhập số tiền hợp lệ');
     if (amount > 1000) return setMessage('❌ Tối đa 1000 USD mỗi lần nạp');
+    if (!walletAddress) return setMessage('❌ Chưa có ví');
 
     setTxLoading(true); setMessage('');
     try {
-      const { walletClient, account } = getWalletClientFromPK();
-
-      // Auto-register nếu chưa
-      const isReg = await publicClient.readContract({
-        address: CONTRACT_ADDRESS, abi: XPayABI,
-        functionName: 'isRegistered', args: [account.address],
+      const res = await fetch('/api/relay/deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userAddress: walletAddress, amount: depositAmount }),
       });
-      if (!isReg) {
-        const { request: regReq } = await publicClient.simulateContract({
-          address: CONTRACT_ADDRESS, abi: XPayABI,
-          functionName: 'register', account,
-        });
-        await walletClient.writeContract(regReq);
-        await new Promise(r => setTimeout(r, 4000));
-      }
-
-      const { request } = await publicClient.simulateContract({
-        address: CONTRACT_ADDRESS, abi: XPayABI,
-        functionName: 'deposit',
-        args: [parseEther(depositAmount)],
-        account,
-      });
-      await walletClient.writeContract(request);
-      setMessage('✅ Nạp thành công! Số dư sẽ cập nhật sau ~15 giây.');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMessage('✅ Nạp thành công! Số dư cập nhật sau ~15 giây.');
       setDepositAmount('');
       setTimeout(() => fetchBalance(), 15000);
     } catch (e: any) {
-      setMessage('❌ ' + (e.shortMessage || e.message));
+      setMessage('❌ ' + e.message);
     }
     setTxLoading(false);
   }
 
-  // ── Chuyển tiền ──────────────────────────────────────────────────────────
   async function handleTransfer() {
     if (!transferTo || !transferAmount) return setMessage('❌ Điền đầy đủ thông tin');
+    if (!walletAddress) return setMessage('❌ Chưa có ví');
 
     setTxLoading(true); setMessage('');
     try {
-      const { walletClient, account } = getWalletClientFromPK();
-      const { request } = await publicClient.simulateContract({
-        address: CONTRACT_ADDRESS, abi: XPayABI,
-        functionName: 'transfer',
-        args: [transferTo as `0x${string}`, parseEther(transferAmount)],
-        account,
+      const res = await fetch('/api/relay/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromAddress: walletAddress, toAddress: transferTo, amount: transferAmount }),
       });
-      await walletClient.writeContract(request);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
       setMessage('✅ Chuyển tiền thành công! Cập nhật sau ~15 giây.');
       setTransferTo(''); setTransferAmount('');
       setTimeout(() => fetchBalance(), 15000);
     } catch (e: any) {
-      setMessage('❌ ' + (e.shortMessage || e.message));
+      setMessage('❌ ' + e.message);
     }
     setTxLoading(false);
   }
 
-  // ── Xóa tài khoản (để test) ──────────────────────────────────────────────
   async function handleDeleteAccount() {
     if (!user) return;
-    // Xóa dữ liệu ví trong wallets (reset về null)
     await supabase.from('wallets').update({
       wallet_address: null,
       encrypted_private_key: null,
       balance: 0,
     }).eq('user_id', user.id);
-
-    // Đăng xuất
     await supabase.auth.signOut();
     router.replace("/");
   }
 
-  // ── Đăng xuất ────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace("/");
   };
 
-  // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
@@ -218,7 +168,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 font-sans">
       <div className="max-w-md mx-auto px-4 py-8 space-y-4">
 
-        {/* ── Profile card ── */}
+        {/* Profile */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 p-6">
           <div className="flex items-center gap-4">
             {avatarUrl ? (
@@ -244,7 +194,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Balance card ── */}
+        {/* Balance */}
         <div className="bg-indigo-600 rounded-2xl p-6 text-white">
           <p className="text-indigo-200 text-xs mb-1">Địa chỉ ví</p>
           <p className="font-mono text-sm text-indigo-100 mb-4">
@@ -261,7 +211,7 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* ── Message ── */}
+        {/* Message */}
         {message && (
           <div className={`px-4 py-3 rounded-xl text-sm font-medium border ${
             message.startsWith('✅')
@@ -272,7 +222,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Tabs ── */}
+        {/* Tabs */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden">
           <div className="flex border-b border-zinc-100 dark:border-zinc-800">
             {(['deposit', 'transfer'] as const).map(t => (
@@ -297,7 +247,7 @@ export default function Dashboard() {
                     placeholder="Số tiền USD"
                     value={depositAmount}
                     onChange={e => setDepositAmount(e.target.value)}
-                    className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700"
+                    className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                   <button onClick={handleDeposit} disabled={txLoading}
                     className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
@@ -312,7 +262,7 @@ export default function Dashboard() {
                   placeholder="Địa chỉ ví người nhận (0x...)"
                   value={transferTo}
                   onChange={e => setTransferTo(e.target.value)}
-                  className="w-full border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700 font-mono"
+                  className="w-full border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
                 />
                 <div className="flex gap-2">
                   <input
@@ -320,7 +270,7 @@ export default function Dashboard() {
                     placeholder="Số tiền USD"
                     value={transferAmount}
                     onChange={e => setTransferAmount(e.target.value)}
-                    className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-700"
+                    className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                   <button onClick={handleTransfer} disabled={txLoading}
                     className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
@@ -332,7 +282,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Xóa tài khoản (để test) ── */}
+        {/* Test mode */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-100 dark:border-zinc-800 p-4">
           <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">🧪 Chế độ test</p>
           {!showDeleteConfirm ? (
@@ -342,8 +292,8 @@ export default function Dashboard() {
             </button>
           ) : (
             <div className="space-y-2">
-              <p className="text-sm text-red-500 font-medium text-center">Xác nhận xóa tài khoản và ví?</p>
-              <p className="text-xs text-zinc-400 text-center">Tài khoản Google vẫn còn, chỉ xóa ví và dữ liệu trong hệ thống</p>
+              <p className="text-sm text-red-500 font-medium text-center">Xác nhận xóa?</p>
+              <p className="text-xs text-zinc-400 text-center">Tài khoản Google vẫn còn, chỉ xóa ví trong hệ thống</p>
               <div className="flex gap-2">
                 <button onClick={() => setShowDeleteConfirm(false)}
                   className="flex-1 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-500 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">

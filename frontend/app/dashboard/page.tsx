@@ -275,12 +275,21 @@ export default function Dashboard() {
       return
     }
     setRecipientLookupLoading(true)
-    const { data } = await supabase
-      .from('wallets')
-      .select('full_name, email')
-      .ilike('wallet_address', addr) // case-insensitive so 0xABC == 0xabc
-      .maybeSingle()
-    setRecipientInfo(data ?? null)
+    try {
+      // Gọi RPC function — bypass RLS, chỉ trả về full_name + email, không lộ private key
+      const { data, error } = await supabase
+        .rpc('lookup_wallet', { p_address: addr })
+      if (error) {
+        console.error('lookupRecipient rpc error:', error)
+        setRecipientInfo(null)
+      } else {
+        const row = Array.isArray(data) ? data[0] : data
+        setRecipientInfo(row ?? null)
+      }
+    } catch (e) {
+      console.error('lookupRecipient exception:', e)
+      setRecipientInfo(null)
+    }
     setRecipientLookupLoading(false)
   }, [supabase])
 
@@ -714,15 +723,9 @@ export default function Dashboard() {
                   </div>
                 )}
                 {!recipientLookupLoading && recipientInfo && (
-                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-green-50 dark:bg-green-950/40 border border-green-100 dark:border-green-900">
-                    <div className="w-8 h-8 rounded-full bg-green-200 dark:bg-green-800 flex items-center justify-center text-sm font-bold text-green-700 dark:text-green-300 shrink-0">
-                      {recipientInfo.full_name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-green-800 dark:text-green-300 truncate">{recipientInfo.full_name}</p>
-                      <p className="text-xs text-green-600 dark:text-green-500 truncate">{recipientInfo.email}</p>
-                    </div>
-                    <Check size={16} className="text-green-500 shrink-0 ml-auto" />
+                  <div className="flex items-center justify-between px-3 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{recipientInfo.full_name}</p>
+                    <Check size={15} className="text-green-500 shrink-0 ml-2" />
                   </div>
                 )}
                 {!recipientLookupLoading && transferTo.length >= 42 && ADDRESS_REGEX.test(transferTo) && !recipientInfo && (

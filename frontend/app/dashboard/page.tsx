@@ -1,6 +1,5 @@
-// file: x-pay/frontend/app/dashboard/page.tsx
 'use client'
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/utils/supabase/client";
@@ -9,8 +8,12 @@ import { createPublicClient, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import XPayABI from '@/lib/contracts/XPay.json';
+import { ScanLine, X, Copy, Check } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { Html5Qrcode } from 'html5-qrcode';
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
+const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 const publicClient = createPublicClient({
   chain: sepolia,
@@ -32,6 +35,12 @@ export default function Dashboard() {
   const [message, setMessage] = useState('');
   const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // ── QR Modal state ─────────────────────────────────────────────────────
+  const [showQR, setShowQR] = useState(false);
+  const [qrView, setQrView] = useState<'scan' | 'mine'>('scan');
+  const [copied, setCopied] = useState(false);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
 
   const createAndSaveWallet = useCallback(async (userId: string) => {
     const pk = generatePrivateKey();
@@ -85,6 +94,80 @@ export default function Dashboard() {
     if (walletAddress) fetchBalance(walletAddress);
   }, [walletAddress]);
 
+  // ── QR Scanner lifecycle ─────────────────────────────────────────────────
+  const isScanningRef = useRef(false);
+
+  const stopScanner = useCallback(async () => {
+    const scanner = scannerRef.current;
+    if (scanner && isScanningRef.current) {
+      isScanningRef.current = false;
+      try {
+        await scanner.stop();
+      } catch {
+        // already stopped, ignore
+      }
+      try {
+        scanner.clear();
+      } catch {
+        // ignore
+      }
+    }
+    scannerRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (showQR && qrView === 'scan') {
+      const scanner = new Html5Qrcode('qr-reader');
+      scannerRef.current = scanner;
+
+      scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: 230 },
+        (decodedText) => {
+          if (ADDRESS_REGEX.test(decodedText)) {
+            setTransferTo(decodedText);
+            setTab('transfer');
+            setMessage('');
+            stopScanner().then(() => setShowQR(false));
+          } else {
+            setMessage('❌ Mã QR không chứa địa chỉ ví hợp lệ');
+          }
+        },
+        () => {} // ignore scan errors per-frame
+      ).then(() => {
+        isScanningRef.current = true;
+      }).catch(() => {
+        setMessage('❌ Không thể truy cập camera. Hãy cấp quyền camera cho trang web.');
+      });
+
+      return () => {
+        stopScanner();
+      };
+    }
+  }, [showQR, qrView, stopScanner]);
+
+  function closeQRModal() {
+    stopScanner();
+    setShowQR(false);
+    setQrView('scan');
+  }
+
+  function openQRModal() {
+    // Laptop/PC (màn hình rộng) → mở thẳng "Mã QR của tôi"
+    // Điện thoại (màn hình hẹp) → mở camera quét
+    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
+    setQrView(isDesktop ? 'mine' : 'scan');
+    setShowQR(true);
+  }
+
+  function copyAddress() {
+    if (!walletAddress) return;
+    navigator.clipboard.writeText(walletAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  // ── Nạp tiền ─────────────────────────────────────────────────────────────
   async function handleDeposit() {
     const amount = parseFloat(depositAmount);
     if (!amount || amount <= 0) return setMessage('❌ Nhập số tiền hợp lệ');
@@ -109,9 +192,15 @@ export default function Dashboard() {
     setTxLoading(false);
   }
 
+  // ── Chuyển tiền ──────────────────────────────────────────────────────────
   async function handleTransfer() {
     if (!transferTo || !transferAmount) return setMessage('❌ Điền đầy đủ thông tin');
     if (!walletAddress) return setMessage('❌ Chưa có ví');
+
+    // Kiểm tra định dạng địa chỉ ví trước
+    if (!ADDRESS_REGEX.test(transferTo)) {
+      return setMessage('❌ Địa chỉ ví không tồn tại');
+    }
 
     setTxLoading(true); setMessage('');
     try {
@@ -196,10 +285,21 @@ export default function Dashboard() {
 
         {/* Balance */}
         <div className="bg-indigo-600 rounded-2xl p-6 text-white">
-          <p className="text-indigo-200 text-xs mb-1">Địa chỉ ví</p>
-          <p className="font-mono text-sm text-indigo-100 mb-4">
-            {walletAddress ? `${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}` : 'Đang tạo...'}
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-indigo-200 text-xs mb-1">Địa chỉ ví</p>
+              <p className="font-mono text-sm text-indigo-100 mb-4">
+                {walletAddress ? `${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}` : 'Đang tạo...'}
+              </p>
+            </div>
+            <button
+              onClick={openQRModal}
+              title="Quét / Hiện mã QR"
+              className="bg-white/15 hover:bg-white/25 rounded-xl p-2.5 transition-colors"
+            >
+              <ScanLine size={20} />
+            </button>
+          </div>
           <p className="text-indigo-200 text-xs mb-1">Số dư</p>
           <p className="text-4xl font-bold tracking-tight">
             ${balance}
@@ -257,13 +357,22 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-3">
-                <input
-                  type="text"
-                  placeholder="Địa chỉ ví người nhận (0x...)"
-                  value={transferTo}
-                  onChange={e => setTransferTo(e.target.value)}
-                  className="w-full border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Địa chỉ ví người nhận (0x...)"
+                    value={transferTo}
+                    onChange={e => setTransferTo(e.target.value)}
+                    className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
+                  />
+                  <button
+                    onClick={openQRModal}
+                    title="Quét mã QR"
+                    className="border border-zinc-200 dark:border-zinc-700 rounded-xl px-3 text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    <ScanLine size={18} />
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="number"
@@ -309,6 +418,68 @@ export default function Dashboard() {
         </div>
 
       </div>
+
+      {/* ── QR Modal ── */}
+      {showQR && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800">
+              <p className="font-semibold text-zinc-900 dark:text-white">
+                {qrView === 'scan' ? 'Quét mã QR' : 'Mã QR của tôi'}
+              </p>
+              <button onClick={closeQRModal} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-5">
+              {qrView === 'scan' ? (
+                <div className="space-y-3">
+                  <div id="qr-reader" className="w-full rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 aspect-square" />
+                  <p className="text-xs text-zinc-400 text-center">
+                    Đưa camera vào mã QR của địa chỉ ví người nhận
+                  </p>
+                  <button
+                    onClick={() => {
+                      stopScanner();
+                      setQrView('mine');
+                    }}
+                    className="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-700 underline py-2"
+                  >
+                    Mã QR của tôi
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4 flex flex-col items-center">
+                  {walletAddress && (
+                    <div className="bg-white p-4 rounded-2xl border border-zinc-100">
+                      <QRCodeSVG value={walletAddress} size={200} />
+                    </div>
+                  )}
+                  <div className="w-full">
+                    <p className="text-xs text-zinc-400 mb-1 text-center">Địa chỉ ví của bạn</p>
+                    <button
+                      onClick={copyAddress}
+                      className="w-full flex items-center justify-center gap-2 font-mono text-xs text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800 rounded-xl px-3 py-2.5 border border-zinc-100 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors break-all"
+                    >
+                      {copied ? <Check size={14} className="text-green-500 shrink-0" /> : <Copy size={14} className="shrink-0" />}
+                      <span className="truncate">{walletAddress}</span>
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setQrView('scan')}
+                    className="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-700 underline py-1"
+                  >
+                    ← Quay lại quét mã
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

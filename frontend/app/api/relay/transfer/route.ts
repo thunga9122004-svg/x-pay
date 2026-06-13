@@ -23,6 +23,9 @@ export async function POST(req: NextRequest) {
     if (amt <= 0) {
       return NextResponse.json({ error: 'Số tiền phải lớn hơn 0' }, { status: 400 });
     }
+    if (fromAddress.toLowerCase() === toAddress.toLowerCase()) {
+      return NextResponse.json({ error: 'Không thể chuyển cho chính mình' }, { status: 400 });
+    }
 
     const relayAccount = privateKeyToAccount(process.env.RELAY_PRIVATE_KEY as `0x${string}`);
     const walletClient = createWalletClient({
@@ -31,6 +34,49 @@ export async function POST(req: NextRequest) {
       transport: http(process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL),
     });
 
+    // Kiểm tra người gửi đã registered chưa
+    const senderReg = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: XPayABI,
+      functionName: 'isRegistered',
+      args: [fromAddress as `0x${string}`],
+    });
+    if (!senderReg) {
+      return NextResponse.json({ error: 'Ví của bạn chưa được đăng ký. Hãy nạp tiền trước.' }, { status: 400 });
+    }
+
+    // Kiểm tra số dư
+    const senderBalance = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: XPayABI,
+      functionName: 'getBalance',
+      args: [fromAddress as `0x${string}`],
+    });
+    if ((senderBalance as bigint) < BigInt(Math.floor(amt))) {
+      return NextResponse.json({ error: 'Số dư không đủ' }, { status: 400 });
+    }
+
+    // Auto-register người nhận nếu chưa có — đợi confirm thật sự
+    const recipientReg = await publicClient.readContract({
+      address: CONTRACT_ADDRESS,
+      abi: XPayABI,
+      functionName: 'isRegistered',
+      args: [toAddress as `0x${string}`],
+    });
+
+    if (!recipientReg) {
+      const { request: regReq } = await publicClient.simulateContract({
+        address: CONTRACT_ADDRESS,
+        abi: XPayABI,
+        functionName: 'registerFor',
+        args: [toAddress as `0x${string}`],
+        account: relayAccount,
+      });
+      const regHash = await walletClient.writeContract(regReq);
+      await publicClient.waitForTransactionReceipt({ hash: regHash });
+    }
+
+    // Thực hiện chuyển tiền
     const { request } = await publicClient.simulateContract({
       address: CONTRACT_ADDRESS,
       abi: XPayABI,

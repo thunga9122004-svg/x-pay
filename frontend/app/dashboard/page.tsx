@@ -218,6 +218,12 @@ export default function Dashboard() {
   const [transferTo, setTransferTo] = useState('')
   const [transferAmount, setTransferAmount] = useState('')
   const [txLoading, setTxLoading] = useState(false)
+
+  // Recipient lookup
+  type RecipientInfo = { full_name: string; email: string } | null
+  const [recipientInfo, setRecipientInfo] = useState<RecipientInfo>(null)
+  const [recipientLookupLoading, setRecipientLookupLoading] = useState(false)
+  const lookupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [successInfo, setSuccessInfo] = useState<SuccessInfo | null>(null)
@@ -261,6 +267,32 @@ export default function Dashboard() {
   const fetchBalance = useCallback(() => {
     if (walletRef.current) fetchBalanceForAddr(walletRef.current)
   }, [fetchBalanceForAddr])
+
+  // ── Lookup recipient by wallet address ───────────────────────────────────────
+  const lookupRecipient = useCallback(async (addr: string) => {
+    if (!ADDRESS_REGEX.test(addr)) {
+      setRecipientInfo(null)
+      return
+    }
+    setRecipientLookupLoading(true)
+    const { data } = await supabase
+      .from('wallets')
+      .select('full_name, email')
+      .ilike('wallet_address', addr) // case-insensitive so 0xABC == 0xabc
+      .maybeSingle()
+    setRecipientInfo(data ?? null)
+    setRecipientLookupLoading(false)
+  }, [supabase])
+
+  // Debounce lookup khi user gõ tay (300ms)
+  function handleTransferToChange(val: string) {
+    setTransferTo(val)
+    setRecipientInfo(null)
+    if (lookupTimerRef.current) clearTimeout(lookupTimerRef.current)
+    if (val.length >= 10) {
+      lookupTimerRef.current = setTimeout(() => lookupRecipient(val), 300)
+    }
+  }
 
   // ── Create & save wallet ─────────────────────────────────────────────────────
   const createAndSaveWallet = useCallback(async (userId: string) => {
@@ -438,6 +470,7 @@ export default function Dashboard() {
             if (ADDRESS_REGEX.test(decodedText)) {
               setTransferTo(decodedText)
               setTab('transfer')
+              lookupRecipient(decodedText)
               stopScanner().then(() => setShowQR(false))
             } else {
               addToast({ type: 'error', title: 'QR không hợp lệ', message: 'Không chứa địa chỉ ví hợp lệ' })
@@ -505,6 +538,7 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(data.error)
       setTransferTo('')
       setTransferAmount('')
+      setRecipientInfo(null)
       addToast({ type: 'info', title: 'Đang xử lý…', message: 'Chờ xác nhận trên blockchain', duration: 10000 })
     } catch (e: any) {
       addToast({ type: 'error', title: 'Chuyển tiền thất bại', message: e.message })
@@ -631,10 +665,14 @@ export default function Dashboard() {
                 <p className="text-xs text-zinc-400">Tối đa $1,000 USD mỗi lần nạp</p>
                 <div className="flex gap-2">
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="Số tiền USD"
                     value={depositAmount}
-                    onChange={e => setDepositAmount(e.target.value)}
+                    onChange={e => {
+                      const val = e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1')
+                      setDepositAmount(val)
+                    }}
                     className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                   <button
@@ -650,12 +688,13 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Address input */}
                 <div className="flex gap-2">
                   <input
                     type="text"
                     placeholder="Địa chỉ ví người nhận (0x...)"
                     value={transferTo}
-                    onChange={e => setTransferTo(e.target.value)}
+                    onChange={e => handleTransferToChange(e.target.value)}
                     className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
                   />
                   <button
@@ -666,12 +705,44 @@ export default function Dashboard() {
                     <ScanLine size={18} />
                   </button>
                 </div>
+
+                {/* Recipient preview */}
+                {recipientLookupLoading && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-zinc-400 text-xs">
+                    <span className="w-3.5 h-3.5 border-2 border-zinc-300 border-t-transparent rounded-full animate-spin shrink-0" />
+                    Đang tra cứu người nhận…
+                  </div>
+                )}
+                {!recipientLookupLoading && recipientInfo && (
+                  <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-green-50 dark:bg-green-950/40 border border-green-100 dark:border-green-900">
+                    <div className="w-8 h-8 rounded-full bg-green-200 dark:bg-green-800 flex items-center justify-center text-sm font-bold text-green-700 dark:text-green-300 shrink-0">
+                      {recipientInfo.full_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-green-800 dark:text-green-300 truncate">{recipientInfo.full_name}</p>
+                      <p className="text-xs text-green-600 dark:text-green-500 truncate">{recipientInfo.email}</p>
+                    </div>
+                    <Check size={16} className="text-green-500 shrink-0 ml-auto" />
+                  </div>
+                )}
+                {!recipientLookupLoading && transferTo.length >= 42 && ADDRESS_REGEX.test(transferTo) && !recipientInfo && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-400">
+                    ⚠️ Địa chỉ hợp lệ nhưng chưa có trong hệ thống (ví ngoài)
+                  </div>
+                )}
+
+                {/* Amount + Send */}
                 <div className="flex gap-2">
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="Số tiền USD"
                     value={transferAmount}
-                    onChange={e => setTransferAmount(e.target.value)}
+                    onChange={e => {
+                      // Chỉ cho phép số và dấu chấm thập phân
+                      const val = e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1')
+                      setTransferAmount(val)
+                    }}
                     className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                   <button

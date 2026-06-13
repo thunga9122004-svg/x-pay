@@ -1,4 +1,4 @@
-X-Pay/
+X-Pay
 ├── backend
 │   ├── artifacts
 │   │   ├── artifacts.d.ts
@@ -49,7 +49,6 @@ X-Pay/
 │   │   ├── layout.tsx
 │   │   ├── page.tsx
 │   │   └── providers.tsx
-│   ├── cau_truc_thu_muc.txt
 │   ├── CLAUDE.md
 │   ├── eslint.config.mjs
 │   ├── lib
@@ -73,9 +72,11 @@ X-Pay/
 │   ├── README.md
 │   ├── tsconfig.json
 │   ├── utils
+│   │   ├── folder
 │   │   └── supabase
+│   │       ├── admin.ts
 │   │       └── client.ts
 │   └── vercel.json
 └── README.md
 
-31 directories, 48 files
+32 directories, 48 files

@@ -1,4 +1,5 @@
 'use client'
+// file: frontend/app/dashboard/page.tsx
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
+import { useToast } from '@/components/toast';
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
 const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -50,6 +52,7 @@ function formatDate(iso: string) {
 export default function Dashboard() {
   const supabase = createClient();
   const router = useRouter();
+  const { addToast } = useToast();
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +62,6 @@ export default function Dashboard() {
   const [transferTo, setTransferTo] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [txLoading, setTxLoading] = useState(false);
-  const [message, setMessage] = useState('');
   const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -76,6 +78,10 @@ export default function Dashboard() {
   const [txHasMore, setTxHasMore] = useState(true);
   const [txListLoading, setTxListLoading] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Tx | null>(null);
+
+  // keep latest walletAddress accessible in realtime callback
+  const walletRef = useRef<string | null>(null);
+  useEffect(() => { walletRef.current = walletAddress; }, [walletAddress]);
 
   const createAndSaveWallet = useCallback(async (userId: string) => {
     const pk = generatePrivateKey();
@@ -129,6 +135,66 @@ export default function Dashboard() {
     if (walletAddress) fetchBalance(walletAddress);
   }, [walletAddress]);
 
+  // ── Supabase Realtime: subscribe transactions ──────────────────────────
+  useEffect(() => {
+    if (!walletAddress) return;
+
+    const channel = supabase
+      .channel(`transactions:${walletAddress}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'transactions',
+        },
+        (payload) => {
+          const tx = payload.new as Tx;
+          const myAddr = walletRef.current?.toLowerCase();
+          const isDeposit = tx.type === 'deposit' && tx.to_address?.toLowerCase() === myAddr;
+          const isSentByMe = tx.type === 'transfer' && tx.from_address?.toLowerCase() === myAddr;
+          const isReceivedByMe = tx.type === 'transfer' && tx.to_address?.toLowerCase() === myAddr;
+
+          if (!isDeposit && !isSentByMe && !isReceivedByMe) return;
+
+          // Cập nhật số dư ngay lập tức
+          fetchBalance(walletRef.current ?? undefined);
+
+          // Cập nhật history nếu đang mở
+          setTxs(prev => [tx, ...prev]);
+
+          // Hiện toast phù hợp
+          if (isDeposit) {
+            addToast({
+              type: 'success',
+              title: 'Nạp tiền thành công',
+              message: `+$${tx.amount} USD đã vào ví của bạn`,
+              duration: 6000,
+            });
+          } else if (isSentByMe) {
+            addToast({
+              type: 'info',
+              title: 'Chuyển tiền thành công',
+              message: `Đã gửi $${tx.amount} USD đến ${shortAddr(tx.to_address)}`,
+              duration: 6000,
+            });
+          } else if (isReceivedByMe) {
+            addToast({
+              type: 'success',
+              title: 'Nhận tiền',
+              message: `+$${tx.amount} USD từ ${shortAddr(tx.from_address)}`,
+              duration: 6000,
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [walletAddress, fetchBalance, addToast]);
+
   // ── Lịch sử giao dịch ─────────────────────────────────────────────────
   const loadHistory = useCallback(async (page: number) => {
     if (!walletAddress) return;
@@ -164,16 +230,8 @@ export default function Dashboard() {
     const scanner = scannerRef.current;
     if (scanner && isScanningRef.current) {
       isScanningRef.current = false;
-      try {
-        await scanner.stop();
-      } catch {
-        // already stopped, ignore
-      }
-      try {
-        scanner.clear();
-      } catch {
-        // ignore
-      }
+      try { await scanner.stop(); } catch {}
+      try { scanner.clear(); } catch {}
     }
     scannerRef.current = null;
   }, []);
@@ -190,22 +248,19 @@ export default function Dashboard() {
           if (ADDRESS_REGEX.test(decodedText)) {
             setTransferTo(decodedText);
             setTab('transfer');
-            setMessage('');
             stopScanner().then(() => setShowQR(false));
           } else {
-            setMessage('❌ Mã QR không chứa địa chỉ ví hợp lệ');
+            addToast({ type: 'error', title: 'QR không hợp lệ', message: 'Mã QR không chứa địa chỉ ví hợp lệ' });
           }
         },
-        () => {} // ignore scan errors per-frame
+        () => {}
       ).then(() => {
         isScanningRef.current = true;
       }).catch(() => {
-        setMessage('❌ Không thể truy cập camera. Hãy cấp quyền camera cho trang web.');
+        addToast({ type: 'error', title: 'Không thể truy cập camera', message: 'Hãy cấp quyền camera cho trang web.' });
       });
 
-      return () => {
-        stopScanner();
-      };
+      return () => { stopScanner(); };
     }
   }, [showQR, qrView, stopScanner]);
 
@@ -216,8 +271,6 @@ export default function Dashboard() {
   }
 
   function openQRModal() {
-    // Laptop/PC (màn hình rộng) → mở thẳng "Mã QR của tôi"
-    // Điện thoại (màn hình hẹp) → mở camera quét
     const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
     setQrView(isDesktop ? 'mine' : 'scan');
     setShowQR(true);
@@ -233,11 +286,11 @@ export default function Dashboard() {
   // ── Nạp tiền ─────────────────────────────────────────────────────────────
   async function handleDeposit() {
     const amount = parseFloat(depositAmount);
-    if (!amount || amount <= 0) return setMessage('❌ Nhập số tiền hợp lệ');
-    if (amount > 1000) return setMessage('❌ Tối đa 1000 USD mỗi lần nạp');
-    if (!walletAddress) return setMessage('❌ Chưa có ví');
+    if (!amount || amount <= 0) return addToast({ type: 'error', title: 'Số tiền không hợp lệ' });
+    if (amount > 1000) return addToast({ type: 'error', title: 'Tối đa $1,000 USD mỗi lần nạp' });
+    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' });
 
-    setTxLoading(true); setMessage('');
+    setTxLoading(true);
     try {
       const res = await fetch('/api/relay/deposit', {
         method: 'POST',
@@ -246,26 +299,22 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setMessage('✅ Nạp thành công! Số dư cập nhật sau ~15 giây.');
       setDepositAmount('');
-      setTimeout(() => fetchBalance(), 15000);
+      // Toast + balance update sẽ đến qua Realtime; hiện toast pending nhẹ
+      addToast({ type: 'info', title: 'Giao dịch đã gửi', message: 'Đang chờ xác nhận trên blockchain…', duration: 8000 });
     } catch (e: any) {
-      setMessage('❌ ' + e.message);
+      addToast({ type: 'error', title: 'Nạp thất bại', message: e.message });
     }
     setTxLoading(false);
   }
 
   // ── Chuyển tiền ──────────────────────────────────────────────────────────
   async function handleTransfer() {
-    if (!transferTo || !transferAmount) return setMessage('❌ Điền đầy đủ thông tin');
-    if (!walletAddress) return setMessage('❌ Chưa có ví');
+    if (!transferTo || !transferAmount) return addToast({ type: 'error', title: 'Điền đầy đủ thông tin' });
+    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' });
+    if (!ADDRESS_REGEX.test(transferTo)) return addToast({ type: 'error', title: 'Địa chỉ ví không hợp lệ' });
 
-    // Kiểm tra định dạng địa chỉ ví trước
-    if (!ADDRESS_REGEX.test(transferTo)) {
-      return setMessage('❌ Địa chỉ ví không tồn tại');
-    }
-
-    setTxLoading(true); setMessage('');
+    setTxLoading(true);
     try {
       const res = await fetch('/api/relay/transfer', {
         method: 'POST',
@@ -274,11 +323,10 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setMessage('✅ Chuyển tiền thành công! Cập nhật sau ~15 giây.');
       setTransferTo(''); setTransferAmount('');
-      setTimeout(() => fetchBalance(), 15000);
+      addToast({ type: 'info', title: 'Giao dịch đã gửi', message: 'Đang chờ xác nhận trên blockchain…', duration: 8000 });
     } catch (e: any) {
-      setMessage('❌ ' + e.message);
+      addToast({ type: 'error', title: 'Chuyển tiền thất bại', message: e.message });
     }
     setTxLoading(false);
   }
@@ -383,17 +431,6 @@ export default function Dashboard() {
           Lịch sử giao dịch
         </button>
 
-        {/* Message */}
-        {message && (
-          <div className={`px-4 py-3 rounded-xl text-sm font-medium border ${
-            message.startsWith('✅')
-              ? 'bg-green-50 text-green-700 border-green-100 dark:bg-green-950 dark:text-green-400 dark:border-green-900'
-              : 'bg-red-50 text-red-600 border-red-100 dark:bg-red-950 dark:text-red-400 dark:border-red-900'
-          }`}>
-            {message}
-          </div>
-        )}
-
         {/* Tabs */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden">
           <div className="flex border-b border-zinc-100 dark:border-zinc-800">
@@ -495,7 +532,6 @@ export default function Dashboard() {
       {showQR && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm overflow-hidden">
-            {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800">
               <p className="font-semibold text-zinc-900 dark:text-white">
                 {qrView === 'scan' ? 'Quét mã QR' : 'Mã QR của tôi'}
@@ -505,7 +541,6 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* Content */}
             <div className="p-5">
               {qrView === 'scan' ? (
                 <div className="space-y-3">
@@ -514,10 +549,7 @@ export default function Dashboard() {
                     Đưa camera vào mã QR của địa chỉ ví người nhận
                   </p>
                   <button
-                    onClick={() => {
-                      stopScanner();
-                      setQrView('mine');
-                    }}
+                    onClick={() => { stopScanner(); setQrView('mine'); }}
                     className="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-700 underline py-2"
                   >
                     Mã QR của tôi
@@ -557,7 +589,6 @@ export default function Dashboard() {
       {showHistory && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
-            {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
               <p className="font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
                 <History size={18} /> Lịch sử giao dịch
@@ -567,7 +598,6 @@ export default function Dashboard() {
               </button>
             </div>
 
-            {/* List */}
             <div className="overflow-y-auto flex-1">
               {txs.length === 0 && !txListLoading && (
                 <p className="text-center text-sm text-zinc-400 py-10">Chưa có giao dịch nào</p>
@@ -577,9 +607,7 @@ export default function Dashboard() {
                 const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase();
                 const isDeposit = t.type === 'deposit';
                 const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền';
-                const counterparty = isDeposit
-                  ? null
-                  : isOut ? t.to_address : t.from_address;
+                const counterparty = isDeposit ? null : isOut ? t.to_address : t.from_address;
 
                 return (
                   <button

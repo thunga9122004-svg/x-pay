@@ -1,9 +1,9 @@
-// file: frontend/app/api/transfer/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import XPayABI from '@/lib/contracts/XPay.json';
+import { createAdminClient } from '@/utils/supabase/admin';
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
 
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Số dư không đủ' }, { status: 400 });
     }
 
-    // Auto-register người nhận nếu chưa có — đợi confirm thật sự
+    // Auto-register người nhận nếu chưa có
     const recipientReg = await publicClient.readContract({
       address: CONTRACT_ADDRESS,
       abi: XPayABI,
@@ -90,6 +90,22 @@ export async function POST(req: NextRequest) {
     });
 
     const txHash = await walletClient.writeContract(request);
+
+    // Ghi lịch sử giao dịch
+    try {
+      const admin = createAdminClient();
+      await admin.from('transactions').insert({
+        type: 'transfer',
+        from_address: fromAddress,
+        to_address: toAddress,
+        amount: Math.floor(amt),
+        tx_hash: txHash,
+        status: 'success',
+      });
+    } catch (logErr) {
+      console.error('Lỗi ghi lịch sử giao dịch (transfer):', logErr);
+    }
+
     return NextResponse.json({ success: true, txHash });
   } catch (e: any) {
     console.error('Relay transfer error:', e);

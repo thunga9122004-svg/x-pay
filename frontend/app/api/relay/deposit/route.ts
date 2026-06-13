@@ -1,9 +1,9 @@
-// file: frontend/app/api/deposit/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import XPayABI from '@/lib/contracts/XPay.json';
+import { createAdminClient } from '@/utils/supabase/admin';
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       transport: http(process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL),
     });
 
-    // Auto-register nếu chưa — đợi confirm thật sự
+    // Auto-register nếu chưa
     const isReg = await publicClient.readContract({
       address: CONTRACT_ADDRESS,
       abi: XPayABI,
@@ -48,7 +48,6 @@ export async function POST(req: NextRequest) {
         account: relayAccount,
       });
       const regHash = await walletClient.writeContract(regReq);
-      // Đợi transaction được mine xong mới tiếp tục
       await publicClient.waitForTransactionReceipt({ hash: regHash });
     }
 
@@ -61,6 +60,23 @@ export async function POST(req: NextRequest) {
     });
 
     const txHash = await walletClient.writeContract(request);
+
+    // Ghi lịch sử giao dịch
+    try {
+      const admin = createAdminClient();
+      await admin.from('transactions').insert({
+        type: 'deposit',
+        from_address: null,
+        to_address: userAddress,
+        amount: Math.floor(amt),
+        tx_hash: txHash,
+        status: 'success',
+      });
+    } catch (logErr) {
+      console.error('Lỗi ghi lịch sử giao dịch (deposit):', logErr);
+      // Không throw — giao dịch on-chain đã thành công, không nên fail response
+    }
+
     return NextResponse.json({ success: true, txHash });
   } catch (e: any) {
     console.error('Relay deposit error:', e);

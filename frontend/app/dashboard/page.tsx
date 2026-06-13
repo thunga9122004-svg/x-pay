@@ -8,17 +8,44 @@ import { createPublicClient, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import XPayABI from '@/lib/contracts/XPay.json';
-import { ScanLine, X, Copy, Check } from 'lucide-react';
+import {
+  ScanLine, X, Copy, Check, History,
+  ArrowDownLeft, ArrowUpRight, ExternalLink,
+} from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
 const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+const PAGE_SIZE = 10;
 
 const publicClient = createPublicClient({
   chain: sepolia,
   transport: http(process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL),
 });
+
+type Tx = {
+  id: string;
+  type: 'deposit' | 'transfer';
+  from_address: string | null;
+  to_address: string;
+  amount: number;
+  tx_hash: string;
+  status: string;
+  created_at: string;
+};
+
+function shortAddr(addr?: string | null) {
+  if (!addr) return '—';
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleString('vi-VN', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
 
 export default function Dashboard() {
   const supabase = createClient();
@@ -41,6 +68,14 @@ export default function Dashboard() {
   const [qrView, setQrView] = useState<'scan' | 'mine'>('scan');
   const [copied, setCopied] = useState(false);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+
+  // ── History state ─────────────────────────────────────────────────────
+  const [showHistory, setShowHistory] = useState(false);
+  const [txs, setTxs] = useState<Tx[]>([]);
+  const [txPage, setTxPage] = useState(0);
+  const [txHasMore, setTxHasMore] = useState(true);
+  const [txListLoading, setTxListLoading] = useState(false);
+  const [selectedTx, setSelectedTx] = useState<Tx | null>(null);
 
   const createAndSaveWallet = useCallback(async (userId: string) => {
     const pk = generatePrivateKey();
@@ -93,6 +128,34 @@ export default function Dashboard() {
   useEffect(() => {
     if (walletAddress) fetchBalance(walletAddress);
   }, [walletAddress]);
+
+  // ── Lịch sử giao dịch ─────────────────────────────────────────────────
+  const loadHistory = useCallback(async (page: number) => {
+    if (!walletAddress) return;
+    setTxListLoading(true);
+    const from = page * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .or(`from_address.eq.${walletAddress},to_address.eq.${walletAddress}`)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (!error && data) {
+      setTxs(prev => (page === 0 ? (data as Tx[]) : [...prev, ...(data as Tx[])]));
+      setTxHasMore(data.length === PAGE_SIZE);
+      setTxPage(page);
+    }
+    setTxListLoading(false);
+  }, [walletAddress, supabase]);
+
+  function openHistory() {
+    setShowHistory(true);
+    setTxs([]);
+    setTxHasMore(true);
+    loadHistory(0);
+  }
 
   // ── QR Scanner lifecycle ─────────────────────────────────────────────────
   const isScanningRef = useRef(false);
@@ -311,6 +374,15 @@ export default function Dashboard() {
           </button>
         </div>
 
+        {/* Lịch sử giao dịch */}
+        <button
+          onClick={openHistory}
+          className="w-full flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 py-3.5 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+        >
+          <History size={18} />
+          Lịch sử giao dịch
+        </button>
+
         {/* Message */}
         {message && (
           <div className={`px-4 py-3 rounded-xl text-sm font-medium border ${
@@ -476,6 +548,160 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── History Panel ── */}
+      {showHistory && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
+              <p className="font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                <History size={18} /> Lịch sử giao dịch
+              </p>
+              <button onClick={() => setShowHistory(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* List */}
+            <div className="overflow-y-auto flex-1">
+              {txs.length === 0 && !txListLoading && (
+                <p className="text-center text-sm text-zinc-400 py-10">Chưa có giao dịch nào</p>
+              )}
+
+              {txs.map(t => {
+                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase();
+                const isDeposit = t.type === 'deposit';
+                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền';
+                const counterparty = isDeposit
+                  ? null
+                  : isOut ? t.to_address : t.from_address;
+
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setSelectedTx(t)}
+                    className="w-full flex items-center gap-3 px-5 py-3.5 border-b border-zinc-50 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left"
+                  >
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
+                      isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'
+                    }`}>
+                      {isOut ? <ArrowUpRight size={16} /> : <ArrowDownLeft size={16} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-zinc-900 dark:text-white">{label}</p>
+                      <p className="text-xs text-zinc-400">
+                        {counterparty ? shortAddr(counterparty) : 'Hệ thống'} · {formatDate(t.created_at)}
+                      </p>
+                    </div>
+                    <p className={`text-sm font-semibold shrink-0 ${isOut ? 'text-red-500' : 'text-green-600'}`}>
+                      {isOut ? '-' : '+'}${t.amount}
+                    </p>
+                  </button>
+                );
+              })}
+
+              {txHasMore && txs.length > 0 && (
+                <div className="p-4">
+                  <button
+                    onClick={() => loadHistory(txPage + 1)}
+                    disabled={txListLoading}
+                    className="w-full py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                  >
+                    {txListLoading ? 'Đang tải...' : 'Tải thêm'}
+                  </button>
+                </div>
+              )}
+
+              {txListLoading && txs.length === 0 && (
+                <div className="flex justify-center py-10">
+                  <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Transaction Detail Modal ── */}
+      {selectedTx && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100 dark:border-zinc-800">
+              <p className="font-semibold text-zinc-900 dark:text-white">Chi tiết giao dịch</p>
+              <button onClick={() => setSelectedTx(null)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {(() => {
+                const t = selectedTx;
+                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase();
+                const isDeposit = t.type === 'deposit';
+                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền';
+
+                return (
+                  <>
+                    <div className="text-center">
+                      <div className={`inline-flex w-12 h-12 rounded-full items-center justify-center mb-2 ${
+                        isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'
+                      }`}>
+                        {isOut ? <ArrowUpRight size={20} /> : <ArrowDownLeft size={20} />}
+                      </div>
+                      <p className="text-sm text-zinc-400">{label}</p>
+                      <p className={`text-3xl font-bold ${isOut ? 'text-red-500' : 'text-green-600'}`}>
+                        {isOut ? '-' : '+'}${t.amount}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      {!isDeposit && (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-400">Từ</span>
+                            <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.from_address)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-zinc-400">Đến</span>
+                            <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.to_address)}</span>
+                          </div>
+                        </>
+                      )}
+                      {isDeposit && (
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">Vào ví</span>
+                          <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.to_address)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">Thời gian</span>
+                        <span className="text-zinc-700 dark:text-zinc-300">{formatDate(t.created_at)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">Trạng thái</span>
+                        <span className="inline-flex items-center gap-1 text-green-600 font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                          Thành công
+                        </span>
+                      </div>
+                    </div>
+
+                    <a
+                      href={`https://sepolia.etherscan.io/tx/${t.tx_hash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full flex items-center justify-center gap-2 border border-zinc-200 dark:border-zinc-700 rounded-xl py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      Xem trên Etherscan <ExternalLink size={14} />
+                    </a>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>

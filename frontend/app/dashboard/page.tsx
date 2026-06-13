@@ -1,352 +1,534 @@
 'use client'
 // file: frontend/app/dashboard/page.tsx
-import { useEffect, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
-import { createClient } from "@/utils/supabase/client";
-import type { User } from "@supabase/supabase-js";
-import { createPublicClient, http } from 'viem';
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { sepolia } from 'viem/chains';
-import XPayABI from '@/lib/contracts/XPay.json';
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+import { createClient } from '@/utils/supabase/client'
+import type { User } from '@supabase/supabase-js'
+import { createPublicClient, http } from 'viem'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { sepolia } from 'viem/chains'
+import XPayABI from '@/lib/contracts/XPay.json'
 import {
   ScanLine, X, Copy, Check, History,
-  ArrowDownLeft, ArrowUpRight, ExternalLink,
-} from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
-import { Html5Qrcode } from 'html5-qrcode';
-import { useToast } from '@/components/toast';
+  ArrowDownLeft, ArrowUpRight, ExternalLink, CircleCheckBig,
+} from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
+import { Html5Qrcode } from 'html5-qrcode'
+import { useToast } from '@/components/toast'
 
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`;
-const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
-const PAGE_SIZE = 10;
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as `0x${string}`
+const ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/
+const PAGE_SIZE = 10
 
 const publicClient = createPublicClient({
   chain: sepolia,
   transport: http(process.env.NEXT_PUBLIC_ALCHEMY_RPC_URL),
-});
+})
 
 type Tx = {
-  id: string;
-  type: 'deposit' | 'transfer';
-  from_address: string | null;
-  to_address: string;
-  amount: number;
-  tx_hash: string;
-  status: string;
-  created_at: string;
-};
+  id: string
+  type: 'deposit' | 'transfer'
+  from_address: string | null
+  to_address: string
+  amount: number
+  tx_hash: string
+  status: string
+  created_at: string
+}
 
+// ── Success Screen ─────────────────────────────────────────────────────────────
+type SuccessInfo = {
+  type: 'deposit' | 'transfer_sent' | 'transfer_received'
+  amount: number
+  counterparty?: string | null
+  txHash: string
+}
+
+function SuccessScreen({ info, onClose }: { info: SuccessInfo; onClose: () => void }) {
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    requestAnimationFrame(() => setVisible(true))
+  }, [])
+
+  function dismiss() {
+    setVisible(false)
+    setTimeout(onClose, 300)
+  }
+
+  const titles: Record<SuccessInfo['type'], string> = {
+    deposit: 'Nạp tiền thành công',
+    transfer_sent: 'Chuyển tiền thành công',
+    transfer_received: 'Bạn vừa nhận tiền',
+  }
+
+  const subtitles: Record<SuccessInfo['type'], string> = {
+    deposit: 'Số tiền đã được ghi vào ví của bạn',
+    transfer_sent: `Đã gửi đến ${info.counterparty ? `${info.counterparty.slice(0, 6)}...${info.counterparty.slice(-4)}` : ''}`,
+    transfer_received: `Từ ${info.counterparty ? `${info.counterparty.slice(0, 6)}...${info.counterparty.slice(-4)}` : ''}`,
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+      style={{
+        background: 'rgba(0,0,0,0.55)',
+        backdropFilter: 'blur(4px)',
+        opacity: visible ? 1 : 0,
+        transition: 'opacity 0.3s ease',
+      }}
+    >
+      <div
+        style={{
+          transform: visible ? 'scale(1) translateY(0)' : 'scale(0.92) translateY(24px)',
+          transition: 'transform 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+        }}
+        className="bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl"
+      >
+        {/* Green header */}
+        <div className="bg-emerald-500 px-6 pt-10 pb-8 flex flex-col items-center gap-3">
+          <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center">
+            <CircleCheckBig size={48} className="text-white" strokeWidth={1.5} />
+          </div>
+          <p className="text-white text-xl font-bold mt-1">{titles[info.type]}</p>
+          <p className="text-emerald-100 text-sm">{subtitles[info.type]}</p>
+        </div>
+
+        {/* Amount */}
+        <div className="px-6 py-5 border-b border-zinc-100 dark:border-zinc-800 text-center">
+          <p className="text-4xl font-bold text-zinc-900 dark:text-white tracking-tight">
+            {info.type === 'transfer_sent' ? '-' : '+'}${info.amount}
+            <span className="text-base font-normal text-zinc-400 ml-2">USD</span>
+          </p>
+        </div>
+
+        {/* Details */}
+        <div className="px-6 py-4 space-y-2.5 text-sm">
+          {info.counterparty && (
+            <div className="flex justify-between">
+              <span className="text-zinc-400">{info.type === 'transfer_sent' ? 'Người nhận' : 'Người gửi'}</span>
+              <span className="font-mono text-zinc-700 dark:text-zinc-300 text-xs">
+                {info.counterparty.slice(0, 10)}...{info.counterparty.slice(-8)}
+              </span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-zinc-400">Trạng thái</span>
+            <span className="flex items-center gap-1.5 text-emerald-600 font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+              Thành công
+            </span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-zinc-400">Mã giao dịch</span>
+            <a
+              href={`https://sepolia.etherscan.io/tx/${info.txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-indigo-500 hover:text-indigo-700 font-mono text-xs"
+            >
+              {info.txHash.slice(0, 8)}...{info.txHash.slice(-6)}
+              <ExternalLink size={11} />
+            </a>
+          </div>
+        </div>
+
+        {/* Button */}
+        <div className="px-6 pb-6 pt-2">
+          <button
+            onClick={dismiss}
+            className="w-full bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-semibold py-3.5 rounded-2xl transition-colors text-sm"
+          >
+            Xong
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function shortAddr(addr?: string | null) {
-  if (!addr) return '—';
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  if (!addr) return '—'
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString('vi-VN', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
-  });
+  })
 }
 
+// ── Notification sound (Web Audio API) ────────────────────────────────────────
+function playSuccessSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const notes = [523.25, 659.25, 783.99] // C5 E5 G5
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const start = ctx.currentTime + i * 0.12
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.35)
+      osc.start(start)
+      osc.stop(start + 0.35)
+    })
+  } catch {}
+}
+
+function playReceiveSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const notes = [783.99, 1046.5] // G5 C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const start = ctx.currentTime + i * 0.15
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(0.2, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.4)
+      osc.start(start)
+      osc.stop(start + 0.4)
+    })
+  } catch {}
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const supabase = createClient();
-  const router = useRouter();
-  const { addToast } = useToast();
+  const supabase = createClient()
+  const router = useRouter()
+  const { addToast } = useToast()
 
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [balance, setBalance] = useState<string>('0');
-  const [depositAmount, setDepositAmount] = useState('');
-  const [transferTo, setTransferTo] = useState('');
-  const [transferAmount, setTransferAmount] = useState('');
-  const [txLoading, setTxLoading] = useState(false);
-  const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit');
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [walletAddress, setWalletAddress] = useState<string | null>(null)
+  const [balance, setBalance] = useState<string>('0')
+  const [depositAmount, setDepositAmount] = useState('')
+  const [transferTo, setTransferTo] = useState('')
+  const [transferAmount, setTransferAmount] = useState('')
+  const [txLoading, setTxLoading] = useState(false)
+  const [tab, setTab] = useState<'deposit' | 'transfer'>('deposit')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [successInfo, setSuccessInfo] = useState<SuccessInfo | null>(null)
 
-  // ── QR Modal state ─────────────────────────────────────────────────────
-  const [showQR, setShowQR] = useState(false);
-  const [qrView, setQrView] = useState<'scan' | 'mine'>('scan');
-  const [copied, setCopied] = useState(false);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  // QR Modal
+  const [showQR, setShowQR] = useState(false)
+  const [qrView, setQrView] = useState<'scan' | 'mine'>('scan')
+  const [copied, setCopied] = useState(false)
+  const scannerRef = useRef<Html5Qrcode | null>(null)
 
-  // ── History state ─────────────────────────────────────────────────────
-  const [showHistory, setShowHistory] = useState(false);
-  const [txs, setTxs] = useState<Tx[]>([]);
-  const [txPage, setTxPage] = useState(0);
-  const [txHasMore, setTxHasMore] = useState(true);
-  const [txListLoading, setTxListLoading] = useState(false);
-  const [selectedTx, setSelectedTx] = useState<Tx | null>(null);
+  // History
+  const [showHistory, setShowHistory] = useState(false)
+  const [txs, setTxs] = useState<Tx[]>([])
+  const [txPage, setTxPage] = useState(0)
+  const [txHasMore, setTxHasMore] = useState(true)
+  const [txListLoading, setTxListLoading] = useState(false)
+  const [selectedTx, setSelectedTx] = useState<Tx | null>(null)
 
-  // keep latest walletAddress accessible in realtime callback
-  const walletRef = useRef<string | null>(null);
-  useEffect(() => { walletRef.current = walletAddress; }, [walletAddress]);
+  // Refs để tránh stale closure trong realtime callbacks
+  const walletRef = useRef<string | null>(null)
+  const contractAddressRef = useRef(CONTRACT_ADDRESS)
 
+  useEffect(() => { walletRef.current = walletAddress }, [walletAddress])
+
+  // ── Fetch balance ────────────────────────────────────────────────────────────
+  const fetchBalanceForAddr = useCallback(async (addr: string) => {
+    if (!addr) return
+    try {
+      const bal = await publicClient.readContract({
+        address: contractAddressRef.current,
+        abi: XPayABI,
+        functionName: 'getBalance',
+        args: [addr as `0x${string}`],
+      })
+      setBalance((bal as bigint).toString())
+    } catch (e) {
+      console.error('fetchBalance error', e)
+    }
+  }, [])
+
+  const fetchBalance = useCallback(() => {
+    if (walletRef.current) fetchBalanceForAddr(walletRef.current)
+  }, [fetchBalanceForAddr])
+
+  // ── Create & save wallet ─────────────────────────────────────────────────────
   const createAndSaveWallet = useCallback(async (userId: string) => {
-    const pk = generatePrivateKey();
-    const account = privateKeyToAccount(pk);
-    const addr = account.address;
+    const pk = generatePrivateKey()
+    const account = privateKeyToAccount(pk)
+    const addr = account.address
     await supabase.from('wallets').update({
       wallet_address: addr,
       encrypted_private_key: pk,
-    }).eq('user_id', userId);
-    setWalletAddress(addr);
-    return addr;
-  }, [supabase]);
+    }).eq('user_id', userId)
+    setWalletAddress(addr)
+    return addr
+  }, [supabase])
 
+  // ── Init ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace("/"); return; }
-      setUser(user);
+      // Dùng getUser() thay vì getSession() để verify token với Supabase server.
+      // Điều này tránh lỗi "Invalid Refresh Token" im lặng khi session hết hạn.
+      const { data: { user }, error } = await supabase.auth.getUser()
+
+      if (error || !user) {
+        // Session hết hạn hoặc không hợp lệ → clear và redirect
+        await supabase.auth.signOut()
+        router.replace('/')
+        return
+      }
+
+      setUser(user)
 
       const { data: wallet } = await supabase
         .from('wallets')
         .select('wallet_address, encrypted_private_key')
         .eq('user_id', user.id)
-        .single();
+        .single()
 
+      let addr: string
       if (wallet?.wallet_address) {
-        setWalletAddress(wallet.wallet_address);
+        setWalletAddress(wallet.wallet_address)
+        addr = wallet.wallet_address
       } else {
-        await createAndSaveWallet(user.id);
+        addr = await createAndSaveWallet(user.id)
       }
-      setLoading(false);
-    };
-    init();
-  }, []);
 
-  const fetchBalance = useCallback(async (addr?: string) => {
-    const address = (addr || walletAddress) as `0x${string}`;
-    if (!address) return;
-    try {
-      const bal = await publicClient.readContract({
-        address: CONTRACT_ADDRESS,
-        abi: XPayABI,
-        functionName: 'getBalance',
-        args: [address],
-      });
-      setBalance((bal as bigint).toString());
-    } catch (e) { console.error(e); }
-  }, [walletAddress]);
+      await fetchBalanceForAddr(addr)
+      setLoading(false)
+    }
 
+    init()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auth state change listener ───────────────────────────────────────────────
+  // Xử lý token hết hạn trong khi user đang dùng app
   useEffect(() => {
-    if (walletAddress) fetchBalance(walletAddress);
-  }, [walletAddress]);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && !session)) {
+          router.replace('/')
+        }
+      }
+    )
+    return () => subscription.unsubscribe()
+  }, [supabase, router])
 
-  // ── Supabase Realtime: subscribe transactions ──────────────────────────
+  // ── Supabase Realtime ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!walletAddress) return;
+    if (!walletAddress) return
 
     const channel = supabase
-      .channel(`transactions:${walletAddress}`)
+      .channel(`txn-${walletAddress}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'transactions',
-        },
+        { event: 'INSERT', schema: 'public', table: 'transactions' },
         (payload) => {
-          const tx = payload.new as Tx;
-          const myAddr = walletRef.current?.toLowerCase();
-          const isDeposit = tx.type === 'deposit' && tx.to_address?.toLowerCase() === myAddr;
-          const isSentByMe = tx.type === 'transfer' && tx.from_address?.toLowerCase() === myAddr;
-          const isReceivedByMe = tx.type === 'transfer' && tx.to_address?.toLowerCase() === myAddr;
+          const tx = payload.new as Tx
+          const myAddr = walletRef.current?.toLowerCase()
+          if (!myAddr) return
 
-          if (!isDeposit && !isSentByMe && !isReceivedByMe) return;
+          const isDeposit = tx.type === 'deposit' && tx.to_address?.toLowerCase() === myAddr
+          const isSentByMe = tx.type === 'transfer' && tx.from_address?.toLowerCase() === myAddr
+          const isReceivedByMe = tx.type === 'transfer' && tx.to_address?.toLowerCase() === myAddr
 
-          // Cập nhật số dư ngay lập tức
-          fetchBalance(walletRef.current ?? undefined);
+          if (!isDeposit && !isSentByMe && !isReceivedByMe) return
 
-          // Cập nhật history nếu đang mở
-          setTxs(prev => [tx, ...prev]);
+          // Cập nhật số dư ngay
+          fetchBalanceForAddr(myAddr)
 
-          // Hiện toast phù hợp
+          // Prepend vào history list
+          setTxs(prev => [tx, ...prev])
+
           if (isDeposit) {
-            addToast({
-              type: 'success',
-              title: 'Nạp tiền thành công',
-              message: `+$${tx.amount} USD đã vào ví của bạn`,
-              duration: 6000,
-            });
+            playSuccessSound()
+            setSuccessInfo({ type: 'deposit', amount: tx.amount, txHash: tx.tx_hash })
           } else if (isSentByMe) {
-            addToast({
-              type: 'info',
-              title: 'Chuyển tiền thành công',
-              message: `Đã gửi $${tx.amount} USD đến ${shortAddr(tx.to_address)}`,
-              duration: 6000,
-            });
+            playSuccessSound()
+            setSuccessInfo({
+              type: 'transfer_sent',
+              amount: tx.amount,
+              counterparty: tx.to_address,
+              txHash: tx.tx_hash,
+            })
           } else if (isReceivedByMe) {
+            playReceiveSound()
             addToast({
               type: 'success',
-              title: 'Nhận tiền',
+              title: 'Bạn vừa nhận tiền!',
               message: `+$${tx.amount} USD từ ${shortAddr(tx.from_address)}`,
-              duration: 6000,
-            });
+              duration: 8000,
+            })
+            setSuccessInfo({
+              type: 'transfer_received',
+              amount: tx.amount,
+              counterparty: tx.from_address,
+              txHash: tx.tx_hash,
+            })
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Realtime] channel status:', status)
+      })
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [walletAddress, fetchBalance, addToast]);
+    return () => { supabase.removeChannel(channel) }
+  }, [walletAddress, fetchBalanceForAddr, addToast])
 
-  // ── Lịch sử giao dịch ─────────────────────────────────────────────────
+  // ── History ──────────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async (page: number) => {
-    if (!walletAddress) return;
-    setTxListLoading(true);
-    const from = page * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    if (!walletAddress) return
+    setTxListLoading(true)
+    const from = page * PAGE_SIZE
+    const to = from + PAGE_SIZE - 1
     const { data, error } = await supabase
       .from('transactions')
       .select('*')
       .or(`from_address.eq.${walletAddress},to_address.eq.${walletAddress}`)
       .order('created_at', { ascending: false })
-      .range(from, to);
-
+      .range(from, to)
     if (!error && data) {
-      setTxs(prev => (page === 0 ? (data as Tx[]) : [...prev, ...(data as Tx[])]));
-      setTxHasMore(data.length === PAGE_SIZE);
-      setTxPage(page);
+      setTxs(prev => (page === 0 ? (data as Tx[]) : [...prev, ...(data as Tx[])]))
+      setTxHasMore(data.length === PAGE_SIZE)
+      setTxPage(page)
     }
-    setTxListLoading(false);
-  }, [walletAddress, supabase]);
+    setTxListLoading(false)
+  }, [walletAddress, supabase])
 
   function openHistory() {
-    setShowHistory(true);
-    setTxs([]);
-    setTxHasMore(true);
-    loadHistory(0);
+    setShowHistory(true)
+    setTxs([])
+    setTxHasMore(true)
+    loadHistory(0)
   }
 
-  // ── QR Scanner lifecycle ─────────────────────────────────────────────────
-  const isScanningRef = useRef(false);
+  // ── QR Scanner ────────────────────────────────────────────────────────────────
+  const isScanningRef = useRef(false)
 
   const stopScanner = useCallback(async () => {
-    const scanner = scannerRef.current;
+    const scanner = scannerRef.current
     if (scanner && isScanningRef.current) {
-      isScanningRef.current = false;
-      try { await scanner.stop(); } catch {}
-      try { scanner.clear(); } catch {}
+      isScanningRef.current = false
+      try { await scanner.stop() } catch {}
+      try { scanner.clear() } catch {}
     }
-    scannerRef.current = null;
-  }, []);
+    scannerRef.current = null
+  }, [])
 
   useEffect(() => {
     if (showQR && qrView === 'scan') {
-      const scanner = new Html5Qrcode('qr-reader');
-      scannerRef.current = scanner;
-
-      scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: 230 },
-        (decodedText) => {
-          if (ADDRESS_REGEX.test(decodedText)) {
-            setTransferTo(decodedText);
-            setTab('transfer');
-            stopScanner().then(() => setShowQR(false));
-          } else {
-            addToast({ type: 'error', title: 'QR không hợp lệ', message: 'Mã QR không chứa địa chỉ ví hợp lệ' });
-          }
-        },
-        () => {}
-      ).then(() => {
-        isScanningRef.current = true;
-      }).catch(() => {
-        addToast({ type: 'error', title: 'Không thể truy cập camera', message: 'Hãy cấp quyền camera cho trang web.' });
-      });
-
-      return () => { stopScanner(); };
+      const scanner = new Html5Qrcode('qr-reader')
+      scannerRef.current = scanner
+      scanner
+        .start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: 230 },
+          (decodedText) => {
+            if (ADDRESS_REGEX.test(decodedText)) {
+              setTransferTo(decodedText)
+              setTab('transfer')
+              stopScanner().then(() => setShowQR(false))
+            } else {
+              addToast({ type: 'error', title: 'QR không hợp lệ', message: 'Không chứa địa chỉ ví hợp lệ' })
+            }
+          },
+          () => {}
+        )
+        .then(() => { isScanningRef.current = true })
+        .catch(() => {
+          addToast({ type: 'error', title: 'Không thể truy cập camera', message: 'Hãy cấp quyền camera cho trang web.' })
+        })
+      return () => { stopScanner() }
     }
-  }, [showQR, qrView, stopScanner]);
+  }, [showQR, qrView, stopScanner, addToast])
 
-  function closeQRModal() {
-    stopScanner();
-    setShowQR(false);
-    setQrView('scan');
-  }
-
+  function closeQRModal() { stopScanner(); setShowQR(false); setQrView('scan') }
   function openQRModal() {
-    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
-    setQrView(isDesktop ? 'mine' : 'scan');
-    setShowQR(true);
+    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768
+    setQrView(isDesktop ? 'mine' : 'scan')
+    setShowQR(true)
   }
-
   function copyAddress() {
-    if (!walletAddress) return;
-    navigator.clipboard.writeText(walletAddress);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (!walletAddress) return
+    navigator.clipboard.writeText(walletAddress)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
-  // ── Nạp tiền ─────────────────────────────────────────────────────────────
+  // ── Deposit ───────────────────────────────────────────────────────────────────
   async function handleDeposit() {
-    const amount = parseFloat(depositAmount);
-    if (!amount || amount <= 0) return addToast({ type: 'error', title: 'Số tiền không hợp lệ' });
-    if (amount > 1000) return addToast({ type: 'error', title: 'Tối đa $1,000 USD mỗi lần nạp' });
-    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' });
-
-    setTxLoading(true);
+    const amount = parseFloat(depositAmount)
+    if (!amount || amount <= 0) return addToast({ type: 'error', title: 'Số tiền không hợp lệ' })
+    if (amount > 1000) return addToast({ type: 'error', title: 'Tối đa $1,000 USD mỗi lần nạp' })
+    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' })
+    setTxLoading(true)
     try {
       const res = await fetch('/api/relay/deposit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userAddress: walletAddress, amount: depositAmount }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setDepositAmount('');
-      // Toast + balance update sẽ đến qua Realtime; hiện toast pending nhẹ
-      addToast({ type: 'info', title: 'Giao dịch đã gửi', message: 'Đang chờ xác nhận trên blockchain…', duration: 8000 });
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setDepositAmount('')
+      addToast({ type: 'info', title: 'Đang xử lý…', message: 'Chờ xác nhận trên blockchain', duration: 10000 })
     } catch (e: any) {
-      addToast({ type: 'error', title: 'Nạp thất bại', message: e.message });
+      addToast({ type: 'error', title: 'Nạp thất bại', message: e.message })
     }
-    setTxLoading(false);
+    setTxLoading(false)
   }
 
-  // ── Chuyển tiền ──────────────────────────────────────────────────────────
+  // ── Transfer ──────────────────────────────────────────────────────────────────
   async function handleTransfer() {
-    if (!transferTo || !transferAmount) return addToast({ type: 'error', title: 'Điền đầy đủ thông tin' });
-    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' });
-    if (!ADDRESS_REGEX.test(transferTo)) return addToast({ type: 'error', title: 'Địa chỉ ví không hợp lệ' });
-
-    setTxLoading(true);
+    if (!transferTo || !transferAmount) return addToast({ type: 'error', title: 'Điền đầy đủ thông tin' })
+    if (!walletAddress) return addToast({ type: 'error', title: 'Chưa có ví' })
+    if (!ADDRESS_REGEX.test(transferTo)) return addToast({ type: 'error', title: 'Địa chỉ ví không hợp lệ' })
+    setTxLoading(true)
     try {
       const res = await fetch('/api/relay/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fromAddress: walletAddress, toAddress: transferTo, amount: transferAmount }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setTransferTo(''); setTransferAmount('');
-      addToast({ type: 'info', title: 'Giao dịch đã gửi', message: 'Đang chờ xác nhận trên blockchain…', duration: 8000 });
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setTransferTo('')
+      setTransferAmount('')
+      addToast({ type: 'info', title: 'Đang xử lý…', message: 'Chờ xác nhận trên blockchain', duration: 10000 })
     } catch (e: any) {
-      addToast({ type: 'error', title: 'Chuyển tiền thất bại', message: e.message });
+      addToast({ type: 'error', title: 'Chuyển tiền thất bại', message: e.message })
     }
-    setTxLoading(false);
+    setTxLoading(false)
   }
 
   async function handleDeleteAccount() {
-    if (!user) return;
+    if (!user) return
     await supabase.from('wallets').update({
       wallet_address: null,
       encrypted_private_key: null,
       balance: 0,
-    }).eq('user_id', user.id);
-    await supabase.auth.signOut();
-    router.replace("/");
+    }).eq('user_id', user.id)
+    await supabase.auth.signOut()
+    router.replace('/')
   }
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.replace("/");
-  };
+    await supabase.auth.signOut()
+    router.replace('/')
+  }
 
+  // ── Loading / auth guard ──────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
@@ -355,14 +537,13 @@ export default function Dashboard() {
           <p className="text-zinc-400 text-sm">Đang khởi tạo tài khoản...</p>
         </div>
       </div>
-    );
+    )
   }
+  if (!user) return null
 
-  if (!user) return null;
-
-  const avatarUrl = user.user_metadata?.avatar_url as string | undefined;
-  const fullName = (user.user_metadata?.full_name as string) ?? user.email ?? '';
-  const email = user.email ?? '';
+  const avatarUrl = user.user_metadata?.avatar_url as string | undefined
+  const fullName = (user.user_metadata?.full_name as string) ?? user.email ?? ''
+  const email = user.email ?? ''
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 font-sans">
@@ -372,8 +553,7 @@ export default function Dashboard() {
         <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 p-6">
           <div className="flex items-center gap-4">
             {avatarUrl ? (
-              <Image src={avatarUrl} alt="Avatar" width={56} height={56}
-                className="rounded-full ring-2 ring-indigo-100 dark:ring-indigo-900" />
+              <Image src={avatarUrl} alt="Avatar" width={56} height={56} className="rounded-full ring-2 ring-indigo-100 dark:ring-indigo-900" />
             ) : (
               <div className="w-14 h-14 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-xl font-bold text-indigo-600">
                 {fullName.charAt(0).toUpperCase()}
@@ -387,8 +567,7 @@ export default function Dashboard() {
                 Google
               </span>
             </div>
-            <button onClick={handleLogout}
-              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+            <button onClick={handleLogout} className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
               Đăng xuất
             </button>
           </div>
@@ -400,7 +579,9 @@ export default function Dashboard() {
             <div>
               <p className="text-indigo-200 text-xs mb-1">Địa chỉ ví</p>
               <p className="font-mono text-sm text-indigo-100 mb-4">
-                {walletAddress ? `${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}` : 'Đang tạo...'}
+                {walletAddress
+                  ? `${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}`
+                  : 'Đang tạo...'}
               </p>
             </div>
             <button
@@ -416,13 +597,12 @@ export default function Dashboard() {
             ${balance}
             <span className="text-lg font-normal text-indigo-300 ml-2">USD</span>
           </p>
-          <button onClick={() => fetchBalance()}
-            className="mt-3 text-indigo-300 hover:text-white text-xs underline transition-colors">
+          <button onClick={fetchBalance} className="mt-3 text-indigo-300 hover:text-white text-xs underline transition-colors">
             🔄 Cập nhật số dư
           </button>
         </div>
 
-        {/* Lịch sử giao dịch */}
+        {/* History button */}
         <button
           onClick={openHistory}
           className="w-full flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 py-3.5 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
@@ -431,7 +611,7 @@ export default function Dashboard() {
           Lịch sử giao dịch
         </button>
 
-        {/* Tabs */}
+        {/* Tabs: Deposit / Transfer */}
         <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-zinc-100 dark:border-zinc-800 overflow-hidden">
           <div className="flex border-b border-zinc-100 dark:border-zinc-800">
             {(['deposit', 'transfer'] as const).map(t => (
@@ -445,7 +625,6 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-
           <div className="p-5">
             {tab === 'deposit' ? (
               <div className="space-y-3">
@@ -458,9 +637,14 @@ export default function Dashboard() {
                     onChange={e => setDepositAmount(e.target.value)}
                     className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
-                  <button onClick={handleDeposit} disabled={txLoading}
-                    className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
-                    {txLoading ? <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Nạp'}
+                  <button
+                    onClick={handleDeposit}
+                    disabled={txLoading}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                  >
+                    {txLoading
+                      ? <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : 'Nạp'}
                   </button>
                 </div>
               </div>
@@ -490,9 +674,14 @@ export default function Dashboard() {
                     onChange={e => setTransferAmount(e.target.value)}
                     className="flex-1 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
-                  <button onClick={handleTransfer} disabled={txLoading}
-                    className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
-                    {txLoading ? <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'Gửi'}
+                  <button
+                    onClick={handleTransfer}
+                    disabled={txLoading}
+                    className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                  >
+                    {txLoading
+                      ? <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : 'Gửi'}
                   </button>
                 </div>
               </div>
@@ -504,8 +693,10 @@ export default function Dashboard() {
         <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-100 dark:border-zinc-800 p-4">
           <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">🧪 Chế độ test</p>
           {!showDeleteConfirm ? (
-            <button onClick={() => setShowDeleteConfirm(true)}
-              className="w-full py-2.5 rounded-xl border border-red-200 dark:border-red-900 text-red-500 text-sm font-medium hover:bg-red-50 dark:hover:bg-red-950 transition-colors">
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="w-full py-2.5 rounded-xl border border-red-200 dark:border-red-900 text-red-500 text-sm font-medium hover:bg-red-50 dark:hover:bg-red-950 transition-colors"
+            >
               Xóa tài khoản & ví (reset để test lại)
             </button>
           ) : (
@@ -513,22 +704,25 @@ export default function Dashboard() {
               <p className="text-sm text-red-500 font-medium text-center">Xác nhận xóa?</p>
               <p className="text-xs text-zinc-400 text-center">Tài khoản Google vẫn còn, chỉ xóa ví trong hệ thống</p>
               <div className="flex gap-2">
-                <button onClick={() => setShowDeleteConfirm(false)}
-                  className="flex-1 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-500 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="flex-1 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-500 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                >
                   Huỷ
                 </button>
-                <button onClick={handleDeleteAccount}
-                  className="flex-1 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors">
+                <button
+                  onClick={handleDeleteAccount}
+                  className="flex-1 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors"
+                >
                   Xác nhận xóa
                 </button>
               </div>
             </div>
           )}
         </div>
-
       </div>
 
-      {/* ── QR Modal ── */}
+      {/* ── QR Modal ─────────────────────────────────────────────────────────────── */}
       {showQR && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm overflow-hidden">
@@ -540,16 +734,13 @@ export default function Dashboard() {
                 <X size={20} />
               </button>
             </div>
-
             <div className="p-5">
               {qrView === 'scan' ? (
                 <div className="space-y-3">
                   <div id="qr-reader" className="w-full rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-800 aspect-square" />
-                  <p className="text-xs text-zinc-400 text-center">
-                    Đưa camera vào mã QR của địa chỉ ví người nhận
-                  </p>
+                  <p className="text-xs text-zinc-400 text-center">Đưa camera vào mã QR của địa chỉ ví người nhận</p>
                   <button
-                    onClick={() => { stopScanner(); setQrView('mine'); }}
+                    onClick={() => { stopScanner(); setQrView('mine') }}
                     className="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-700 underline py-2"
                   >
                     Mã QR của tôi
@@ -568,7 +759,9 @@ export default function Dashboard() {
                       onClick={copyAddress}
                       className="w-full flex items-center justify-center gap-2 font-mono text-xs text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800 rounded-xl px-3 py-2.5 border border-zinc-100 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors break-all"
                     >
-                      {copied ? <Check size={14} className="text-green-500 shrink-0" /> : <Copy size={14} className="shrink-0" />}
+                      {copied
+                        ? <Check size={14} className="text-green-500 shrink-0" />
+                        : <Copy size={14} className="shrink-0" />}
                       <span className="truncate">{walletAddress}</span>
                     </button>
                   </div>
@@ -585,7 +778,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── History Panel ── */}
+      {/* ── History Panel ─────────────────────────────────────────────────────────── */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
@@ -597,27 +790,20 @@ export default function Dashboard() {
                 <X size={20} />
               </button>
             </div>
-
             <div className="overflow-y-auto flex-1">
               {txs.length === 0 && !txListLoading && (
                 <p className="text-center text-sm text-zinc-400 py-10">Chưa có giao dịch nào</p>
               )}
-
               {txs.map(t => {
-                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase();
-                const isDeposit = t.type === 'deposit';
-                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền';
-                const counterparty = isDeposit ? null : isOut ? t.to_address : t.from_address;
-
+                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase()
+                const isDeposit = t.type === 'deposit'
+                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền'
+                const counterparty = isDeposit ? null : isOut ? t.to_address : t.from_address
                 return (
-                  <button
-                    key={t.id}
-                    onClick={() => setSelectedTx(t)}
+                  <button key={t.id} onClick={() => setSelectedTx(t)}
                     className="w-full flex items-center gap-3 px-5 py-3.5 border-b border-zinc-50 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors text-left"
                   >
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
-                      isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'
-                    }`}>
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'}`}>
                       {isOut ? <ArrowUpRight size={16} /> : <ArrowDownLeft size={16} />}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -630,9 +816,8 @@ export default function Dashboard() {
                       {isOut ? '-' : '+'}${t.amount}
                     </p>
                   </button>
-                );
+                )
               })}
-
               {txHasMore && txs.length > 0 && (
                 <div className="p-4">
                   <button
@@ -644,7 +829,6 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
-
               {txListLoading && txs.length === 0 && (
                 <div className="flex justify-center py-10">
                   <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
@@ -655,7 +839,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Transaction Detail Modal ── */}
+      {/* ── Transaction Detail Modal ───────────────────────────────────────────────── */}
       {selectedTx && (
         <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-zinc-900 rounded-2xl w-full max-w-sm overflow-hidden">
@@ -665,20 +849,16 @@ export default function Dashboard() {
                 <X size={20} />
               </button>
             </div>
-
             <div className="p-5 space-y-4">
               {(() => {
-                const t = selectedTx;
-                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase();
-                const isDeposit = t.type === 'deposit';
-                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền';
-
+                const t = selectedTx
+                const isOut = t.type === 'transfer' && t.from_address?.toLowerCase() === walletAddress?.toLowerCase()
+                const isDeposit = t.type === 'deposit'
+                const label = isDeposit ? 'Nạp tiền' : isOut ? 'Chuyển đi' : 'Nhận tiền'
                 return (
                   <>
                     <div className="text-center">
-                      <div className={`inline-flex w-12 h-12 rounded-full items-center justify-center mb-2 ${
-                        isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'
-                      }`}>
+                      <div className={`inline-flex w-12 h-12 rounded-full items-center justify-center mb-2 ${isOut ? 'bg-red-50 text-red-500 dark:bg-red-950' : 'bg-green-50 text-green-600 dark:bg-green-950'}`}>
                         {isOut ? <ArrowUpRight size={20} /> : <ArrowDownLeft size={20} />}
                       </div>
                       <p className="text-sm text-zinc-400">{label}</p>
@@ -686,7 +866,6 @@ export default function Dashboard() {
                         {isOut ? '-' : '+'}${t.amount}
                       </p>
                     </div>
-
                     <div className="space-y-2 text-sm">
                       {!isDeposit && (
                         <>
@@ -718,7 +897,6 @@ export default function Dashboard() {
                         </span>
                       </div>
                     </div>
-
                     <a
                       href={`https://sepolia.etherscan.io/tx/${t.tx_hash}`}
                       target="_blank"
@@ -728,12 +906,17 @@ export default function Dashboard() {
                       Xem trên Etherscan <ExternalLink size={14} />
                     </a>
                   </>
-                );
+                )
               })()}
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Success Screen ─────────────────────────────────────────────────────────── */}
+      {successInfo && (
+        <SuccessScreen info={successInfo} onClose={() => setSuccessInfo(null)} />
+      )}
     </div>
-  );
+  )
 }

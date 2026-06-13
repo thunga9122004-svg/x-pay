@@ -1,4 +1,4 @@
-// file: x-pay/frontend/app/auth/callback/route.ts
+// file: frontend/app/auth/callback/route.ts
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
 
   if (code) {
     const cookieStore = await cookies()
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -25,17 +26,23 @@ export async function GET(request: NextRequest) {
                 cookieStore.set(name, value, options)
               )
             } catch {
-              // The `setAll` method was called from a Server Component.
-              // This can be ignored if you have middleware refreshing sessions.
+              // setAll được gọi từ Server Component — có thể bỏ qua
+              // nếu đã có middleware refresh session.
             }
           },
         },
       }
     )
 
-    await supabase.auth.exchangeCodeForSession(code)
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+
+    if (error) {
+      console.error('[auth/callback] exchangeCodeForSession error:', error.message)
+      // Redirect về trang chủ với thông báo lỗi nếu cần
+      return NextResponse.redirect(`${origin}/?error=auth`)
+    }
   }
 
-  // Sau khi đăng nhập thành công, redirect về /dashboard
+  // Sau khi đăng nhập thành công → /dashboard
   return NextResponse.redirect(`${origin}/dashboard`)
 }

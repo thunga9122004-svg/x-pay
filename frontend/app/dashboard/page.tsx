@@ -42,6 +42,7 @@ type SuccessInfo = {
   type: 'deposit' | 'transfer_sent' | 'transfer_received'
   amount: number
   counterparty?: string | null
+  counterpartyName?: string | null
   txHash: string
 }
 
@@ -63,10 +64,12 @@ function SuccessScreen({ info, onClose }: { info: SuccessInfo; onClose: () => vo
     transfer_received: 'Bạn vừa nhận tiền',
   }
 
+  const cpLabel = info.counterpartyName
+    ?? (info.counterparty ? `${info.counterparty.slice(0, 6)}...${info.counterparty.slice(-4)}` : '')
   const subtitles: Record<SuccessInfo['type'], string> = {
     deposit: 'Số tiền đã được ghi vào ví của bạn',
-    transfer_sent: `Đã gửi đến ${info.counterparty ? `${info.counterparty.slice(0, 6)}...${info.counterparty.slice(-4)}` : ''}`,
-    transfer_received: `Từ ${info.counterparty ? `${info.counterparty.slice(0, 6)}...${info.counterparty.slice(-4)}` : ''}`,
+    transfer_sent: `Đã gửi đến ${cpLabel}`,
+    transfer_received: `Từ ${cpLabel}`,
   }
 
   return (
@@ -108,8 +111,8 @@ function SuccessScreen({ info, onClose }: { info: SuccessInfo; onClose: () => vo
           {info.counterparty && (
             <div className="flex justify-between">
               <span className="text-zinc-400">{info.type === 'transfer_sent' ? 'Người nhận' : 'Người gửi'}</span>
-              <span className="font-mono text-zinc-700 dark:text-zinc-300 text-xs">
-                {info.counterparty.slice(0, 10)}...{info.counterparty.slice(-8)}
+              <span className="text-zinc-700 dark:text-zinc-300 text-sm font-medium">
+                {info.counterpartyName ?? `${info.counterparty.slice(0, 8)}...${info.counterparty.slice(-6)}`}
               </span>
             </div>
           )}
@@ -242,6 +245,9 @@ export default function Dashboard() {
   const [txListLoading, setTxListLoading] = useState(false)
   const [selectedTx, setSelectedTx] = useState<Tx | null>(null)
 
+  // Map address->name cho history list và tx detail
+  const [txNames, setTxNames] = useState<Record<string, string>>({})
+
   // Refs để tránh stale closure trong realtime callbacks
   const walletRef = useRef<string | null>(null)
   const contractAddressRef = useRef(CONTRACT_ADDRESS)
@@ -292,6 +298,24 @@ export default function Dashboard() {
     }
     setRecipientLookupLoading(false)
   }, [supabase])
+
+  // ── Address → name cache (dùng cho history / realtime) ────────────────────
+  const [addrNameCache, setAddrNameCache] = useState<Record<string, string>>({})
+
+  const getNameForAddr = useCallback(async (addr: string | null): Promise<string | null> => {
+    if (!addr) return null
+    const key = addr.toLowerCase()
+    if (addrNameCache[key] !== undefined) return addrNameCache[key] || null
+    try {
+      const { data } = await supabase.rpc('lookup_wallet', { p_address: addr })
+      const row = Array.isArray(data) ? data[0] : data
+      const name = row?.full_name ?? ''
+      setAddrNameCache(prev => ({ ...prev, [key]: name }))
+      return name || null
+    } catch {
+      return null
+    }
+  }, [supabase, addrNameCache])
 
   // Debounce lookup khi user gõ tay (300ms)
   function handleTransferToChange(val: string) {
@@ -397,26 +421,30 @@ export default function Dashboard() {
             setSuccessInfo({ type: 'deposit', amount: tx.amount, txHash: tx.tx_hash })
           } else if (isSentByMe) {
             playSuccessSound()
-            setSuccessInfo({
-              type: 'transfer_sent',
-              amount: tx.amount,
-              counterparty: tx.to_address,
-              txHash: tx.tx_hash,
-            })
+            // Lookup tên người nhận cho success screen
+            const toName = txNames[tx.to_address?.toLowerCase() ?? ''] || null
+            if (toName) {
+              setSuccessInfo({ type: 'transfer_sent', amount: tx.amount, counterparty: tx.to_address, counterpartyName: toName, txHash: tx.tx_hash })
+            } else {
+              supabase.rpc('lookup_wallet', { p_address: tx.to_address }).then(({ data: wd }) => {
+                const row = Array.isArray(wd) ? wd[0] : wd
+                setSuccessInfo({ type: 'transfer_sent', amount: tx.amount, counterparty: tx.to_address, counterpartyName: row?.full_name ?? null, txHash: tx.tx_hash })
+              })
+            }
           } else if (isReceivedByMe) {
             playReceiveSound()
-            addToast({
-              type: 'success',
-              title: 'Bạn vừa nhận tiền!',
-              message: `+$${tx.amount} USD từ ${shortAddr(tx.from_address)}`,
-              duration: 8000,
-            })
-            setSuccessInfo({
-              type: 'transfer_received',
-              amount: tx.amount,
-              counterparty: tx.from_address,
-              txHash: tx.tx_hash,
-            })
+            const fromName = txNames[tx.from_address?.toLowerCase() ?? ''] || null
+            if (fromName) {
+              addToast({ type: 'success', title: 'Bạn vừa nhận tiền!', message: `+$${tx.amount} USD từ ${fromName}`, duration: 8000 })
+              setSuccessInfo({ type: 'transfer_received', amount: tx.amount, counterparty: tx.from_address, counterpartyName: fromName, txHash: tx.tx_hash })
+            } else {
+              supabase.rpc('lookup_wallet', { p_address: tx.from_address }).then(({ data: wd }) => {
+                const row = Array.isArray(wd) ? wd[0] : wd
+                const name = row?.full_name ?? null
+                addToast({ type: 'success', title: 'Bạn vừa nhận tiền!', message: `+$${tx.amount} USD từ ${name ?? shortAddr(tx.from_address)}`, duration: 8000 })
+                setSuccessInfo({ type: 'transfer_received', amount: tx.amount, counterparty: tx.from_address, counterpartyName: name, txHash: tx.tx_hash })
+              })
+            }
           }
         }
       )
@@ -440,9 +468,28 @@ export default function Dashboard() {
       .order('created_at', { ascending: false })
       .range(from, to)
     if (!error && data) {
-      setTxs(prev => (page === 0 ? (data as Tx[]) : [...prev, ...(data as Tx[])]))
-      setTxHasMore(data.length === PAGE_SIZE)
+      const rows = data as Tx[]
+      setTxs(prev => (page === 0 ? rows : [...prev, ...rows]))
+      setTxHasMore(rows.length === PAGE_SIZE)
       setTxPage(page)
+
+      // Lookup tên cho tất cả địa chỉ counterparty chưa có trong cache
+      const addrs = [...new Set(
+        rows.flatMap(t => [t.from_address, t.to_address]).filter(Boolean) as string[]
+      )]
+      addrs.forEach(async (addr) => {
+        const key = addr.toLowerCase()
+        setTxNames(prev => {
+          if (prev[key] !== undefined) return prev
+          return prev
+        })
+        try {
+          const { data: wd } = await supabase.rpc('lookup_wallet', { p_address: addr })
+          const row = Array.isArray(wd) ? wd[0] : wd
+          const name = row?.full_name ?? ''
+          if (name) setTxNames(prev => ({ ...prev, [key]: name }))
+        } catch {}
+      })
     }
     setTxListLoading(false)
   }, [walletAddress, supabase])
@@ -883,7 +930,9 @@ export default function Dashboard() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-zinc-900 dark:text-white">{label}</p>
                       <p className="text-xs text-zinc-400">
-                        {counterparty ? shortAddr(counterparty) : 'Hệ thống'} · {formatDate(t.created_at)}
+                        {counterparty
+                          ? (txNames[counterparty.toLowerCase()] || shortAddr(counterparty))
+                          : 'Hệ thống'} · {formatDate(t.created_at)}
                       </p>
                     </div>
                     <p className={`text-sm font-semibold shrink-0 ${isOut ? 'text-red-500' : 'text-green-600'}`}>
@@ -945,18 +994,24 @@ export default function Dashboard() {
                         <>
                           <div className="flex justify-between">
                             <span className="text-zinc-400">Từ</span>
-                            <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.from_address)}</span>
+                            <span className="text-zinc-700 dark:text-zinc-300 font-medium">
+                              {txNames[t.from_address?.toLowerCase() ?? ''] || shortAddr(t.from_address)}
+                            </span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-zinc-400">Đến</span>
-                            <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.to_address)}</span>
+                            <span className="text-zinc-700 dark:text-zinc-300 font-medium">
+                              {txNames[t.to_address?.toLowerCase() ?? ''] || shortAddr(t.to_address)}
+                            </span>
                           </div>
                         </>
                       )}
                       {isDeposit && (
                         <div className="flex justify-between">
                           <span className="text-zinc-400">Vào ví</span>
-                          <span className="font-mono text-zinc-700 dark:text-zinc-300">{shortAddr(t.to_address)}</span>
+                          <span className="text-zinc-700 dark:text-zinc-300 font-medium">
+                            {txNames[t.to_address?.toLowerCase() ?? ''] || shortAddr(t.to_address)}
+                          </span>
                         </div>
                       )}
                       <div className="flex justify-between">
